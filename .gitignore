@@ -1,0 +1,8 @@
+build/
+results/
+.cache/
+compile_commands.json
+*.log
+*.tar.gz
+*.swp
+*~
