@@ -17,10 +17,11 @@ jobs:
             cmake ninja-build python3
       - name: Build
         run: bash scripts/01_build.sh
-      - name: Run v0-v4 regression
+      - name: Run v0-v5 regression
         run: |
           bash scripts/02_test.sh
           bash scripts/03_test_dialect.sh
           bash scripts/04_test_fusion.sh
           bash scripts/05_test_tiling.sh
           bash scripts/06_test_lowering.sh
+          bash scripts/07_test_bufferization.sh

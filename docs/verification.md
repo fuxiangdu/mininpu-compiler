@@ -22,6 +22,7 @@ The compiler built successfully, including `FuseMatMulBiasRelu.cpp`,
 | v2 | 3-to-1 fusion; idempotence | shared intermediate left unchanged | PASS |
 | v3 | 64/256 KiB planning | 128 B rejected; dynamic shape deferred | PASS |
 | v4 | structured lowering; metadata; idempotence | unfused illegal operations rejected | PASS |
+| v5 | tensor elimination; MemRef allocation/load; tile metadata | local deallocation; wrong order rejected | PASS |
 
 ## Tile-plan evidence
 
@@ -64,6 +65,16 @@ Evidence files:
 - `evidence/planned_64k.mlir`;
 - `evidence/planned_256k.mlir`;
 - `evidence/lowered.mlir`.
+- `evidence/bufferized.mlir`.
+
+## Bufferization evidence
+
+The v5 regression completed successfully on LLVM/MLIR 18.1.3. The generated IR
+contains MemRef-form Linalg, one `memref.alloc`, one matching `memref.dealloc`
+and a `memref.load`; it contains no tensor types or tensor operations. The v3
+tile-plan attributes remain attached to `linalg.matmul`. Running One-Shot
+Bufferize before MiniNPU lowering is rejected as expected because the custom
+tensor operations do not implement `BufferizableOpInterface`.
 
 ## Interpretation limits
 

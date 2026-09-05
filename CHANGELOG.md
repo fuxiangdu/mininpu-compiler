@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0
+
+- Added an end-to-end One-Shot Bufferization stage after MiniNPU lowering.
+- Added ownership-based buffer deallocation for function-local allocations.
+- Added tensor-elimination, metadata-preservation and wrong-order regressions.
+
 ## 0.5.0
 
 - Added full MiniNPU-to-Tensor/Linalg/Arith dialect conversion.

@@ -16,13 +16,15 @@
 3. 设计 UB 容量约束的 M/N/K 分块搜索与算术强度代价模型；在
    `128×256×512 f32` 用例中，64 KiB/256 KiB 分别选择
    `(48,48,48)`/`(112,96,96)`，工作集均满足容量约束；随后通过 Dialect
-   Conversion Lowering 到 Tensor/Linalg/Arith，并保留分块元数据。
+   Conversion Lowering 到 Tensor/Linalg/Arith，并保留分块元数据；集成
+   One-Shot Bufferization，消除 Tensor 并完成局部缓冲区所有权回收。
 
 ## 更短的三行版
 
 - 基于 MLIR 18 开发 MiniNPU 自定义 Dialect、ODS 算子和静态形状 Verifier；
 - 实现带共享值安全检查的 MatMul-BiasAdd-ReLU 融合及 UB 感知分块 Pass；
-- 将融合算子 Lowering 到 Tensor/Linalg/Arith，完成 v0-v4 正负例与幂等性回归。
+- 将融合算子 Lowering 到 Tensor/Linalg/Arith，继续转换为 MemRef 语义，
+  并验证局部分配与回收。
 
 ## 不应写入简历的表述
 

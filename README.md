@@ -6,7 +6,8 @@
 MiniNPU Compiler is an educational out-of-tree MLIR compiler for learning the
 core workflow of an NPU compiler: defining a target dialect, validating tensor
 semantics, rewriting graph patterns, planning tiles under on-chip memory
-constraints, and lowering target operations to upstream structured MLIR.
+constraints, lowering target operations to upstream structured MLIR, and
+materializing tensor values as owned MemRef buffers.
 
 The project is intentionally small enough to read end to end. It demonstrates
 compiler mechanisms and an explicit educational cost model; it does not claim
@@ -20,6 +21,8 @@ flowchart TD
     B --> C["UB-aware tile planning"]
     C --> D["Dialect conversion"]
     D --> E["Tensor + Linalg + Arith IR"]
+    E --> F["One-Shot Bufferization"]
+    F --> G["MemRef + Linalg + Arith IR"]
 ```
 
 | Stage | Main implementation | Result |
@@ -29,10 +32,11 @@ flowchart TD
 | Fusion | `OpRewritePattern` | safe 3-to-1 fusion with single-use guards |
 | Planning | UB-capacity search and cost model | deterministic M/N/K tile metadata |
 | Lowering | MLIR dialect conversion | Tensor/Linalg/Arith with no MiniNPU ops |
+| Bufferization | One-Shot Bufferize and ownership deallocation | tensor-free MemRef/Linalg IR |
 
 ## Verified results
 
-The full v0-v4 suite was built and executed with LLVM/MLIR 18.1.3 on Ubuntu
+The full v0-v5 suite was built and executed with LLVM/MLIR 18.1.3 on Ubuntu
 24.04 x86-64.
 
 For `M=128`, `K=256`, `N=512`, `f32`:
@@ -60,7 +64,7 @@ Required environment:
 ```bash
 chmod +x scripts/*.sh
 bash scripts/01_build.sh
-bash scripts/run_v4.sh
+bash scripts/run_v5.sh
 ```
 
 Or run the compiler pipeline directly:
@@ -77,15 +81,17 @@ build/bin/mininpu-opt test/lowering.mlir \
 - `lib/Transforms/FuseMatMulBiasRelu.cpp`: graph fusion;
 - `lib/Transforms/PlanTiles.cpp`: UB-aware tile selection;
 - `lib/Transforms/LowerToLinalg.cpp`: structured-MLIR lowering;
+- `scripts/07_test_bufferization.sh`: tensor-to-MemRef ownership regression;
 - `test/`: positive, negative, safety and capacity cases;
 - `scripts/`: reproducible build and regression entry points.
 
 ## Current boundary
 
-The tile planner uses a documented educational UB model. The lowering reaches
-structured Tensor/Linalg/Arith IR, not executable LLVM IR or NPU machine code.
-Bufferization, loop/vector lowering, runtime ABI integration, target instruction
-selection and hardware benchmarking are future work.
+The tile planner uses a documented educational UB model. v5 reaches bufferized
+MemRef/Linalg/Arith IR, not executable LLVM IR or NPU machine code. Loop/vector
+lowering, runtime ABI integration, target instruction selection and hardware
+benchmarking remain future work. A local buffer is deallocated in the v5 test;
+buffers returned across a function boundary must be owned by the caller.
 
 ## License
 

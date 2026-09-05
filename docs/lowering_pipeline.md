@@ -1,4 +1,4 @@
-# v4 lowering pipeline
+# v4-v5 lowering and bufferization pipeline
 
 ## Input and output
 
@@ -34,7 +34,23 @@ the matrix element, and clamped with zero using `arith.maximumf`.
 
 ## Current boundary
 
-v4 supports statically shaped floating-point tensors. It reaches standard
-structured MLIR, not executable LLVM IR and not proprietary NPU machine code.
-Bufferization, loop/vector lowering, runtime ABI integration and target code
-generation are separate later stages.
+v4 supports statically shaped floating-point tensors. v5 then runs
+`empty-tensor-to-alloc-tensor`, One-Shot Bufferize with function-boundary
+bufferization, and the ownership-based deallocation pipeline:
+
+```text
+Tensor/Linalg/Arith
+  -> bufferization.alloc_tensor
+  -> one-shot-bufferize
+  -> MemRef/Linalg/Arith
+  -> ownership-based local deallocation
+```
+
+The v5 regression uses a scalar external sink so that the result is observable
+but its allocation remains local. It verifies `memref.alloc`, `memref.load` and
+`memref.dealloc`, complete elimination of tensor types/operations, preservation
+of tile attributes, and rejection of bufferization before custom-op lowering.
+
+v5 still does not produce executable LLVM IR or proprietary NPU machine code.
+Loop/vector lowering, runtime ABI integration and target code generation are
+separate later stages.

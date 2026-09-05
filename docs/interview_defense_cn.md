@@ -6,8 +6,9 @@
 定义 MiniNPU Dialect 和 MatMul、BiasAdd、ReLU 等算子，并用 Verifier 检查
 形状与类型；中端用 PatternRewriter 完成带单用户保护的三算子融合；目标规划
 阶段根据 UB 容量枚举 M/N/K Tile，用工作集约束和算术强度选型；最后通过
-Dialect Conversion Lowering 到 Tensor/Linalg/Arith。项目在 Ubuntu 24.04 上
-完成了 v0-v4 的正例、负例、边界和幂等性回归。
+Dialect Conversion Lowering 到 Tensor/Linalg/Arith，并在 v5 中接入 One-Shot
+Bufferization 转换为 MemRef 语义。项目在 Ubuntu 24.04、LLVM/MLIR 18.1.3
+环境完成 v0-v5 正例、负例、边界和内存所有权回归。
 
 ## 三分钟讲解顺序
 
@@ -22,7 +23,9 @@ Dialect Conversion Lowering 到 Tensor/Linalg/Arith。项目在 Ubuntu 24.04 上
 5. **Lowering**：声明 MiniNPU Dialect 非法，使用 ConversionPattern 生成
    `tensor.empty/linalg.fill/linalg.matmul/linalg.generic`；Bias 通过 AffineMap
    广播，ReLU 用 `maximumf`，最终不允许残留 MiniNPU Op。
-6. **边界**：当前未完成 Bufferization、LLVM IR、运行时和真实 NPU 指令生成，
+6. **Bufferization**：先把 `tensor.empty` 显式化为 `alloc_tensor`，再分析
+   inplace/out-of-place，转换函数边界并用所有权管线回收局部分配。
+7. **边界**：当前未完成 LLVM IR、运行时和真实 NPU 指令生成，
    分块结果是代价模型输出而非硬件性能结论。
 
 ## 高频追问与答案
@@ -160,3 +163,27 @@ Tile 搜索抽成独立可测试策略。修改时先补负例和边界测试，
 它覆盖了真实岗位常见的 IR 定义、Rewrite、算子融合、片上存储建模、Pass
 Pipeline、Lowering 和测试方法；但真实产品还包含复杂硬件约束、运行时、指令
 选择、多核调度、性能工具和大量算子生态。
+
+### 26. Tensor 和 MemRef 的核心区别是什么？
+
+Tensor 表达值语义，通常不显式描述地址、别名和生命周期；MemRef 表达带形状、
+步长、布局与存储空间信息的内存引用。Bufferization 的任务是把 Tensor SSA 值
+映射到具体缓冲区，并决定哪些结果可以复用已有目标缓冲区。
+
+### 27. One-Shot Bufferize 为什么适合 Linalg？
+
+Linalg 使用 destination-passing style，输出目标已经作为 `outs` 操作数传入。
+One-Shot Bufferize 可以沿 SSA use-def 链分析读写冲突，在安全时让结果与目标
+缓冲区原地复用，不能原地复用时才插入分配或复制。
+
+### 28. 为什么 One-Shot Bufferize 后还要做 Deallocation？
+
+One-Shot Bufferize 负责分配和别名决策，不负责完整生命周期回收。v5 使用
+ownership-based deallocation pipeline 跟踪局部缓冲区所有权，最终物化
+`memref.dealloc`。跨函数返回的缓冲区则由调用者接管所有权。
+
+### 29. 为什么必须先 Lower MiniNPU，再做 Bufferization？
+
+MiniNPU 自定义 Tensor 算子没有实现 `BufferizableOpInterface`。先执行
+One-Shot Bufferize 会遇到未知、不可 Bufferize 的算子而失败。先转换到已提供
+Bufferization Interface 的 Linalg/Tensor/Arith，内存化过程才有完整语义。
