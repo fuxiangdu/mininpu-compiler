@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20.0)
-project(MiniNPUCompiler VERSION 0.6.0 LANGUAGES C CXX)
+project(MiniNPUCompiler VERSION 0.7.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

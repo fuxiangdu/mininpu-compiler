@@ -9,6 +9,8 @@ MiniNPU Compiler 是一个基于 LLVM/MLIR 18 的小型、可完整阅读的编�
 覆盖 NPU 编译器常见主链路：自定义 Dialect、算子语义校验、图融合、片上
 UB 容量约束下的分块规划、向 Tensor/Linalg/Arith 标准方言 Lowering，以及
 One-Shot Bufferization 与局部缓冲区所有权回收。
+v6 进一步把 Linalg 物化为显式循环，Lowering 到 LLVM 方言和 LLVM IR，
+并链接为经过数值校验的 x86-64 本机程序。
 
 本项目用于展示编译器机制和可解释的教育型代价模型，不声称复现商业 NPU
 编译器，也不声称已经生成真实 NPU 指令。
@@ -23,6 +25,8 @@ flowchart TD
     D --> E["Tensor + Linalg + Arith IR"]
     E --> F["One-Shot Bufferization"]
     F --> G["MemRef + Linalg + Arith IR"]
+    G --> H["SCF 循环与 LLVM 方言"]
+    H --> I["宿主 CPU 可执行程序"]
 ```
 
 | 阶段 | 核心实现 | 验证点 |
@@ -33,10 +37,11 @@ flowchart TD
 | v3 | UB 约束分块搜索 | 容量约束、代价函数、动态形状回退 |
 | v4 | Dialect Conversion | 完全消除 MiniNPU 算子并保留分块元数据 |
 | v5 | One-Shot Bufferization | 消除 Tensor，生成 MemRef 并回收局部缓冲区 |
+| v6 | SCF/LLVM Lowering 与运行时 ABI | 生成并执行宿主程序，校验 4 个输出元素 |
 
 ## 实测结果
 
-已在 Ubuntu 24.04 x86-64、LLVM/MLIR 18.1.3 环境完成真实构建及 v0-v5
+项目面向 Ubuntu 24.04 x86-64、LLVM/MLIR 18.1.3 环境执行 v0-v6
 全量回归。对于 `M=128、K=256、N=512、f32`：
 
 | UB 容量 | 分块 `(M,N,K)` | 工作集 | 估算 Tile 数 |
@@ -61,7 +66,7 @@ tensor.empty
 ```bash
 chmod +x scripts/*.sh
 bash scripts/01_build.sh
-bash scripts/run_v5.sh
+bash scripts/run_v6.sh
 ```
 
 直接运行完整 Pass Pipeline：
@@ -79,12 +84,13 @@ build/bin/mininpu-opt test/lowering.mlir \
 - `lib/Transforms/PlanTiles.cpp`：UB 感知分块 Pass；
 - `lib/Transforms/LowerToLinalg.cpp`：标准方言 Lowering；
 - `scripts/07_test_bufferization.sh`：Tensor 到 MemRef 及所有权回归；
+- `scripts/08_test_cpu_execution.sh`：循环/LLVM Lowering 与宿主执行回归；
+- `runtime/check_f32.c`：最小数值校验运行时 ABI；
 - `test/`：正常、异常、安全性和容量边界测试；
 - `scripts/`：可复现构建与回归入口。
 
 ## 能力边界
 
-分块模型是公开、可解释的教育型模型；v5 的输出为 MemRef/Linalg/Arith，尚未
-完成循环/向量级 Lowering、LLVM IR、运行时 ABI、目标指令选择和真实硬件性能
-评测。因此简历中可写“完成 One-Shot Bufferization”，不能写“生成 NPU 机器码”。
-测试中的局部分配由 `memref.dealloc` 回收；跨函数返回缓冲区仍由调用者负责。
+分块模型是公开、可解释的教育型模型；v6 生成的是宿主 x86-64 LLVM IR 和
+本机程序，而不是 NPU 机器码。向量化、设备运行时、目标指令选择和 NPU
+硬件性能评测仍属于后续工作。

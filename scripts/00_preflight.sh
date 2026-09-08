@@ -9,11 +9,13 @@ echo "[INFO] memory: $(free -h | awk '/^Mem:/ {print $2}')"
 echo "[INFO] available disk: $(df -h / | awk 'NR == 2 {print $4}')"
 
 for path in \
+  /usr/bin/clang-18 \
   /usr/bin/clang++-18 \
   /usr/bin/cmake \
   /usr/bin/ninja \
   /usr/bin/mlir-opt-18 \
   /usr/bin/mlir-tblgen-18 \
+  /usr/bin/mlir-translate-18 \
   "${LLVM_ROOT}/lib/cmake/mlir/MLIRConfig.cmake" \
   "${LLVM_ROOT}/lib/cmake/llvm/LLVMConfig.cmake"
 do
@@ -25,5 +27,4 @@ done
 
 echo "[INFO] clang: $(/usr/bin/clang++-18 --version | head -n 1)"
 echo "[INFO] MLIR: $(/usr/bin/mlir-opt-18 --version | head -n 1)"
-echo "[PASS] MiniNPU v0 preflight checks passed"
-
+echo "[PASS] MiniNPU v6 preflight checks passed"

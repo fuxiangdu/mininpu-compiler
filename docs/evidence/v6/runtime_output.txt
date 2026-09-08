@@ -1,0 +1,4 @@
+[PASS] output[0] actual=0.00000000 expected=0.00000000 abs_error=0.000e+00
+[PASS] output[1] actual=6.00000000 expected=6.00000000 abs_error=0.000e+00
+[PASS] output[2] actual=5.00000000 expected=5.00000000 abs_error=0.000e+00
+[PASS] output[3] actual=10.00000000 expected=10.00000000 abs_error=0.000e+00

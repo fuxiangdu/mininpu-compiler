@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+- Added Linalg-to-SCF loop materialization and progressive LLVM dialect lowering.
+- Added LLVM IR translation, native Clang linking and host CPU execution.
+- Added four-element numerical checking through a minimal C runtime ABI.
+
 ## 0.6.0
 
 - Added an end-to-end One-Shot Bufferization stage after MiniNPU lowering.

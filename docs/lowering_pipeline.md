@@ -1,4 +1,4 @@
-# v4-v5 lowering and bufferization pipeline
+# v4-v6 lowering, bufferization and host execution pipeline
 
 ## Input and output
 
@@ -51,6 +51,11 @@ but its allocation remains local. It verifies `memref.alloc`, `memref.load` and
 `memref.dealloc`, complete elimination of tensor types/operations, preservation
 of tile attributes, and rejection of bufferization before custom-op lowering.
 
-v5 still does not produce executable LLVM IR or proprietary NPU machine code.
-Loop/vector lowering, runtime ABI integration and target code generation are
-separate later stages.
+v6 materializes the buffer-form Linalg program as explicit SCF loops, lowers
+the remaining SCF/CF/Arith/MemRef/Func operations to the LLVM dialect, exports
+LLVM IR and links a native x86-64 executable. A minimal C ABI checks four
+reference values and returns the mismatch count as the process status.
+
+The host executable proves end-to-end semantics of the educational pipeline.
+It is not proprietary NPU machine code; vectorization, device runtime
+integration and NPU instruction selection remain separate work.

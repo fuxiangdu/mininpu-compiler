@@ -23,6 +23,7 @@ The compiler built successfully, including `FuseMatMulBiasRelu.cpp`,
 | v3 | 64/256 KiB planning | 128 B rejected; dynamic shape deferred | PASS |
 | v4 | structured lowering; metadata; idempotence | unfused illegal operations rejected | PASS |
 | v5 | tensor elimination; MemRef allocation/load; tile metadata | local deallocation; wrong order rejected | PASS |
+| v6 | SCF loops; LLVM dialect/IR; native linking | four reference outputs and process status | PASS |
 
 ## Tile-plan evidence
 
@@ -75,6 +76,15 @@ and a `memref.load`; it contains no tensor types or tensor operations. The v3
 tile-plan attributes remain attached to `linalg.matmul`. Running One-Shot
 Bufferize before MiniNPU lowering is rejected as expected because the custom
 tensor operations do not implement `BufferizableOpInterface`.
+
+## v6 execution evidence
+
+The verified v6 pipeline evaluates a 2x2 MatMul-BiasAdd-ReLU program whose expected
+result is `[[0, 6], [5, 10]]`. The successful regression contains explicit `scf.for` loops,
+an LLVM-dialect-only module, translated LLVM IR containing a native `main`,
+successful Clang linking, four passing runtime checks and exit status zero.
+The complete v0-v6 regression passed on Ubuntu 24.04 with LLVM/MLIR 18.1.3.
+Generated v6 IR and runtime outputs are stored under `docs/evidence/v6/`.
 
 ## Interpretation limits
 

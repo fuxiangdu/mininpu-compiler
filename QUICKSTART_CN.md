@@ -20,14 +20,14 @@ echo "BUILD_EXIT_CODE=$?"
 
 ```bash
 set -o pipefail
-bash scripts/run_v5.sh 2>&1 | tee regression.log
+bash scripts/run_v6.sh 2>&1 | tee regression.log
 echo "TEST_EXIT_CODE=$?"
 ```
 
 成功标志：
 
 ```text
-[PASS] MiniNPU compiler v5 completed
+[PASS] MiniNPU compiler v6 completed
 TEST_EXIT_CODE=0
 ```
 
@@ -40,6 +40,7 @@ bash scripts/04_test_fusion.sh
 bash scripts/05_test_tiling.sh
 bash scripts/06_test_lowering.sh
 bash scripts/07_test_bufferization.sh
+bash scripts/08_test_cpu_execution.sh
 ```
 
 `invalid MatMul`、`128-byte UB` 和 `wrong pipeline/order` 测试中的 error 是程序刻意

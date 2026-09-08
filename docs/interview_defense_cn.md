@@ -140,13 +140,14 @@ Lowering Pattern 只处理融合算子，而 ConversionTarget 把整个 MiniNPU 
 
 覆盖解析打印、常量折叠、非法形状、融合正例、共享使用负例、融合幂等性、
 64/256 KiB 容量差异、无合法 Tile、动态形状回退、Lowering 结构、属性保留、
-Lowering 幂等性和错误顺序拒绝。
+Lowering 幂等性、错误顺序拒绝、Bufferization 所有权、循环/LLVM Lowering，
+以及宿主程序的四元素数值比对。
 
 ### 22. 下一步最有价值的扩展是什么？
 
-先做 One-Shot Bufferization，将 Tensor Linalg 转为 MemRef 语义；再做 Linalg
-Tiling/Loop Lowering、Vectorization 和目标内存空间映射；随后设计运行时 ABI 与
-模拟器或真实后端。每一步都需要新增数值正确性和性能验证。
+v6 已打通宿主 CPU 执行验证；下一步应把规划结果真正用于 Tiling，引入
+Vectorization、内存空间映射与更接近设备的运行时 ABI，再对接模拟器或真实
+后端。每一步都需要新增数值正确性和性能验证。
 
 ### 23. 如果面试官让你现场改项目，你会改什么？
 
@@ -187,3 +188,27 @@ ownership-based deallocation pipeline 跟踪局部缓冲区所有权，最终物
 MiniNPU 自定义 Tensor 算子没有实现 `BufferizableOpInterface`。先执行
 One-Shot Bufferize 会遇到未知、不可 Bufferize 的算子而失败。先转换到已提供
 Bufferization Interface 的 Linalg/Tensor/Arith，内存化过程才有完整语义。
+
+### 30. 为什么 v6 先把 Linalg 降成 SCF 循环？
+
+Linalg 表达高层结构化计算，LLVM IR 不理解 `linalg.matmul` 和
+`linalg.generic`。`convert-linalg-to-loops` 把迭代空间和标量计算物化为
+`scf.for`、`memref.load/store`，之后才能继续处理控制流和地址计算。
+
+### 31. 为什么不能把 LLVM 方言等同于 LLVM IR？
+
+LLVM 方言仍是 MLIR 中的一组 Operation 和 Type，只是语义接近 LLVM IR。
+必须保证模块只含可翻译方言，再由 `mlir-translate --mlir-to-llvmir` 导出真正
+的 LLVM IR，最后由 Clang/LLVM 生成目标文件和可执行程序。
+
+### 32. v6 的运行时 ABI 如何设计？
+
+编译程序调用标量接口 `check_f32(i32,f32,f32,f32)->i32`。C 运行时比较实际值
+与参考值、打印误差并返回 0/1；MLIR `main` 累加四个返回值作为进程退出码。
+这样避免把复杂 MemRef 描述符 ABI 混入第一个端到端执行用例。
+
+### 33. v6 的数值验证证明了什么，没证明什么？
+
+它证明 2x2 静态 f32 用例经过融合、规划、Lowering、Bufferization、循环物化、
+LLVM 翻译和本机链接后语义一致。它不证明动态形状、所有数据类型、大规模性能，
+也不证明已经生成 NPU 指令。

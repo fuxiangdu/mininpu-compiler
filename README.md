@@ -7,7 +7,9 @@ MiniNPU Compiler is an educational out-of-tree MLIR compiler for learning the
 core workflow of an NPU compiler: defining a target dialect, validating tensor
 semantics, rewriting graph patterns, planning tiles under on-chip memory
 constraints, lowering target operations to upstream structured MLIR, and
-materializing tensor values as owned MemRef buffers.
+materializing tensor values as owned MemRef buffers. The v6 pipeline continues
+through explicit loops and the LLVM dialect to a numerically checked host
+executable.
 
 The project is intentionally small enough to read end to end. It demonstrates
 compiler mechanisms and an explicit educational cost model; it does not claim
@@ -23,6 +25,8 @@ flowchart TD
     D --> E["Tensor + Linalg + Arith IR"]
     E --> F["One-Shot Bufferization"]
     F --> G["MemRef + Linalg + Arith IR"]
+    G --> H["SCF loops + LLVM dialect"]
+    H --> I["Native CPU executable"]
 ```
 
 | Stage | Main implementation | Result |
@@ -33,10 +37,11 @@ flowchart TD
 | Planning | UB-capacity search and cost model | deterministic M/N/K tile metadata |
 | Lowering | MLIR dialect conversion | Tensor/Linalg/Arith with no MiniNPU ops |
 | Bufferization | One-Shot Bufferize and ownership deallocation | tensor-free MemRef/Linalg IR |
+| Host code generation | Linalg-to-SCF and progressive LLVM lowering | linked executable with four checked outputs |
 
 ## Verified results
 
-The full v0-v5 suite was built and executed with LLVM/MLIR 18.1.3 on Ubuntu
+The full v0-v6 suite is designed for LLVM/MLIR 18.1.3 on Ubuntu
 24.04 x86-64.
 
 For `M=128`, `K=256`, `N=512`, `f32`:
@@ -64,7 +69,7 @@ Required environment:
 ```bash
 chmod +x scripts/*.sh
 bash scripts/01_build.sh
-bash scripts/run_v5.sh
+bash scripts/run_v6.sh
 ```
 
 Or run the compiler pipeline directly:
@@ -82,16 +87,17 @@ build/bin/mininpu-opt test/lowering.mlir \
 - `lib/Transforms/PlanTiles.cpp`: UB-aware tile selection;
 - `lib/Transforms/LowerToLinalg.cpp`: structured-MLIR lowering;
 - `scripts/07_test_bufferization.sh`: tensor-to-MemRef ownership regression;
+- `scripts/08_test_cpu_execution.sh`: SCF/LLVM lowering and native execution;
+- `runtime/check_f32.c`: minimal numerical-checking runtime ABI;
 - `test/`: positive, negative, safety and capacity cases;
 - `scripts/`: reproducible build and regression entry points.
 
 ## Current boundary
 
-The tile planner uses a documented educational UB model. v5 reaches bufferized
-MemRef/Linalg/Arith IR, not executable LLVM IR or NPU machine code. Loop/vector
-lowering, runtime ABI integration, target instruction selection and hardware
-benchmarking remain future work. A local buffer is deallocated in the v5 test;
-buffers returned across a function boundary must be owned by the caller.
+The tile planner uses a documented educational UB model. v6 produces LLVM IR
+and a native executable for the host CPU. It does not generate NPU machine code.
+Vectorization, proprietary device runtime integration, target instruction
+selection and NPU hardware benchmarking remain future work.
 
 ## License
 

@@ -4,7 +4,7 @@
 
 **MiniNPU Compiler：基于 MLIR 的自定义 Dialect、图融合与 UB 感知分块**
 
-技术栈：`C++17 / LLVM-MLIR 18 / ODS-TableGen / PatternRewriter / Dialect Conversion / CMake / Ninja / Linux`
+技术栈：`C++17 / LLVM-MLIR 18 / ODS-TableGen / PatternRewriter / Dialect Conversion / One-Shot Bufferization / SCF / LLVM IR / CMake / Ninja / Linux`
 
 ## 一页简历版（推荐直接使用）
 
@@ -17,19 +17,21 @@
    `128×256×512 f32` 用例中，64 KiB/256 KiB 分别选择
    `(48,48,48)`/`(112,96,96)`，工作集均满足容量约束；随后通过 Dialect
    Conversion Lowering 到 Tensor/Linalg/Arith，并保留分块元数据；集成
-   One-Shot Bufferization，消除 Tensor 并完成局部缓冲区所有权回收。
+   One-Shot Bufferization，消除 Tensor 并完成局部缓冲区所有权回收；继续
+   Lowering 到显式 SCF 循环和 LLVM 方言，生成宿主 LLVM IR，并通过 C 运行时
+   对 2x2 用例的 4 个输出元素完成端到端数值校验。
 
 ## 更短的三行版
 
 - 基于 MLIR 18 开发 MiniNPU 自定义 Dialect、ODS 算子和静态形状 Verifier；
 - 实现带共享值安全检查的 MatMul-BiasAdd-ReLU 融合及 UB 感知分块 Pass；
-- 将融合算子 Lowering 到 Tensor/Linalg/Arith，继续转换为 MemRef 语义，
-  并验证局部分配与回收。
+- 将融合算子逐级 Lowering 到 Linalg/MemRef、SCF 和 LLVM IR，链接宿主程序
+  并完成端到端数值校验。
 
 ## 不应写入简历的表述
 
 - 不写“实现商用 NPU 编译器”——这是教育型编译器原型；
-- 不写“生成 NPU 机器码”——当前终点是 Tensor/Linalg/Arith；
+- 不写“生成 NPU 机器码”——v6 生成的是宿主 x86-64 LLVM IR；
 - 不写“性能提升若干倍”——项目 B 没有真实硬件延迟基准；
 - 不写“最优分块”——代价模型只是在给定候选和假设下选择最优项；
 - 不写“支持动态形状 Lowering”——v4 Lowering 当前要求静态浮点 Tensor。
