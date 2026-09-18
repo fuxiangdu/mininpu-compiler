@@ -21,7 +21,7 @@ The compiler built successfully, including `FuseMatMulBiasRelu.cpp`,
 | v1 | custom operations registered | incompatible MatMul contraction rejected | PASS |
 | v2 | 3-to-1 fusion; idempotence | shared intermediate left unchanged | PASS |
 | v3 | 64/256 KiB planning | 128 B rejected; dynamic shape deferred | PASS |
-| v4 | structured lowering; metadata; idempotence | unfused illegal operations rejected | PASS |
+| v4 | fused and standalone structured lowering; metadata; idempotence | shared-use safety; dynamic shapes rejected | PASS |
 | v5 | tensor elimination; MemRef allocation/load; tile metadata | local deallocation; wrong order rejected | PASS |
 | v6 | SCF loops; LLVM dialect/IR; native linking | four reference outputs and process status | PASS |
 
@@ -60,6 +60,12 @@ The generic operation uses affine maps `(d0,d1)->(d1)` for bias broadcasting
 and `(d0,d1)->(d0,d1)` for the output. Its scalar body uses `arith.addf` and
 `arith.maximumf`. The 256 KiB tile metadata remains attached to
 `linalg.matmul`, and no MiniNPU operation remains in the output.
+
+MatMul, BiasAdd and ReLU also have independent conversion patterns. This makes
+lowering compositional: an unfused graph, including one whose MatMul result is
+shared by multiple users, can be fully legalized without requiring an unsafe
+fusion first. Dynamic shapes remain an explicit unsupported case at this
+stage and fail full dialect conversion.
 
 Evidence files:
 

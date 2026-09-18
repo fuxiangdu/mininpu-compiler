@@ -35,7 +35,7 @@ flowchart TD
 | Dialect | ODS/TableGen plus C++ verifiers | `matmul`, `bias_add`, `relu`, fused op |
 | Fusion | `OpRewritePattern` | safe 3-to-1 fusion with single-use guards |
 | Planning | UB-capacity search and cost model | deterministic M/N/K tile metadata |
-| Lowering | MLIR dialect conversion | Tensor/Linalg/Arith with no MiniNPU ops |
+| Lowering | MLIR dialect conversion | standalone or fused ops fully legalized to Tensor/Linalg/Arith |
 | Bufferization | One-Shot Bufferize and ownership deallocation | tensor-free MemRef/Linalg IR |
 | Host code generation | Linalg-to-SCF and progressive LLVM lowering | linked executable with four checked outputs |
 
@@ -52,9 +52,9 @@ For `M=128`, `K=256`, `N=512`, `f32`:
 | 256 KiB | `(112,96,96)` | 246,144 B | 36 |
 
 The suite also verifies invalid MatMul shapes, shared-intermediate fusion
-safety, fusion and lowering idempotence, an impossible 128-byte UB target,
-dynamic-shape planning fallback, metadata preservation, and rejection of an
-incorrect lowering pipeline. See [the verification report](docs/verification.md)
+safety, standalone and fused lowering, lowering idempotence, an impossible
+128-byte UB target, dynamic-shape planning fallback and rejection, and
+metadata preservation. See [the verification report](docs/verification.md)
 and the checked-in IR evidence under `docs/evidence/`.
 
 ## Build
@@ -85,7 +85,7 @@ build/bin/mininpu-opt test/lowering.mlir \
 - `lib/Dialect/MiniNPU/`: dialect initialization and semantic verifiers;
 - `lib/Transforms/FuseMatMulBiasRelu.cpp`: graph fusion;
 - `lib/Transforms/PlanTiles.cpp`: UB-aware tile selection;
-- `lib/Transforms/LowerToLinalg.cpp`: structured-MLIR lowering;
+- `lib/Transforms/LowerToLinalg.cpp`: composable lowering for MatMul, BiasAdd, ReLU and the fused operation;
 - `scripts/07_test_bufferization.sh`: tensor-to-MemRef ownership regression;
 - `scripts/08_test_cpu_execution.sh`: SCF/LLVM lowering and native execution;
 - `runtime/check_f32.c`: minimal numerical-checking runtime ABI;

@@ -35,7 +35,7 @@ flowchart TD
 | v1 | ODS/TableGen 自定义 Dialect | 算子注册、形状与类型校验 |
 | v2 | `OpRewritePattern` 图融合 | 单用户保护、幂等性、共享值负例 |
 | v3 | UB 约束分块搜索 | 容量约束、代价函数、动态形状回退 |
-| v4 | Dialect Conversion | 完全消除 MiniNPU 算子并保留分块元数据 |
+| v4 | Dialect Conversion | 独立或融合算子均可完全合法化，并保留分块元数据 |
 | v5 | One-Shot Bufferization | 消除 Tensor，生成 MemRef 并回收局部缓冲区 |
 | v6 | SCF/LLVM Lowering 与运行时 ABI | 生成并执行宿主程序，校验 4 个输出元素 |
 
@@ -82,7 +82,7 @@ build/bin/mininpu-opt test/lowering.mlir \
 - `lib/Dialect/MiniNPU/`：Dialect 初始化和算子 Verifier；
 - `lib/Transforms/FuseMatMulBiasRelu.cpp`：融合 Pass；
 - `lib/Transforms/PlanTiles.cpp`：UB 感知分块 Pass；
-- `lib/Transforms/LowerToLinalg.cpp`：标准方言 Lowering；
+- `lib/Transforms/LowerToLinalg.cpp`：MatMul、BiasAdd、ReLU 及融合算子的组合式 Lowering；
 - `scripts/07_test_bufferization.sh`：Tensor 到 MemRef 及所有权回归；
 - `scripts/08_test_cpu_execution.sh`：循环/LLVM Lowering 与宿主执行回归；
 - `runtime/check_f32.c`：最小数值校验运行时 ABI；

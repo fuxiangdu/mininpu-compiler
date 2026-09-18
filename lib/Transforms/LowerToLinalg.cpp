@@ -29,6 +29,144 @@ using namespace mlir;
 
 namespace {
 
+RankedTensorType getSupportedResultType(Type type) {
+  auto resultType = dyn_cast<RankedTensorType>(type);
+  if (!resultType || !resultType.hasStaticShape() ||
+      !isa<FloatType>(resultType.getElementType()))
+    return {};
+  return resultType;
+}
+
+Value createEmptyTensor(Location location, RankedTensorType type,
+                        ConversionPatternRewriter &rewriter) {
+  return rewriter
+      .create<tensor::EmptyOp>(location, type.getShape(),
+                               type.getElementType())
+      .getResult();
+}
+
+Value createZeroFilledTensor(Location location, RankedTensorType type,
+                             ConversionPatternRewriter &rewriter) {
+  Value empty = createEmptyTensor(location, type, rewriter);
+  auto zero = rewriter.create<arith::ConstantOp>(
+      location, rewriter.getFloatAttr(type.getElementType(), 0.0));
+  auto filled = rewriter.create<linalg::FillOp>(
+      location, TypeRange{type}, ValueRange{zero.getResult()},
+      ValueRange{empty});
+  return filled.getResult(0);
+}
+
+class LowerMatMulPattern final
+    : public OpConversionPattern<mininpu::MatMulOp> {
+public:
+  using OpConversionPattern<mininpu::MatMulOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(mininpu::MatMulOp operation, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RankedTensorType resultType =
+        getSupportedResultType(operation.getOutput().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(
+          operation,
+          "lowering requires a statically shaped floating-point result");
+
+    Location location = operation.getLoc();
+    Value initialized = createZeroFilledTensor(location, resultType, rewriter);
+    auto matmul = rewriter.create<linalg::MatmulOp>(
+        location, TypeRange{resultType},
+        ValueRange{adaptor.getLhs(), adaptor.getRhs()},
+        ValueRange{initialized});
+    rewriter.replaceOp(operation, matmul.getResults());
+    return success();
+  }
+};
+
+class LowerBiasAddPattern final
+    : public OpConversionPattern<mininpu::BiasAddOp> {
+public:
+  using OpConversionPattern<mininpu::BiasAddOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(mininpu::BiasAddOp operation, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RankedTensorType resultType =
+        getSupportedResultType(operation.getOutput().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(
+          operation,
+          "lowering requires a statically shaped floating-point result");
+
+    Location location = operation.getLoc();
+    MLIRContext *context = rewriter.getContext();
+    AffineExpr row = rewriter.getAffineDimExpr(0);
+    AffineExpr column = rewriter.getAffineDimExpr(1);
+    AffineMap outputMap = AffineMap::get(2, 0, {row, column}, context);
+    AffineMap biasMap = AffineMap::get(2, 0, {column}, context);
+    llvm::SmallVector<AffineMap> indexingMaps{outputMap, biasMap,
+                                               outputMap};
+    llvm::SmallVector<utils::IteratorType> iteratorTypes(
+        2, utils::IteratorType::parallel);
+    Value empty = createEmptyTensor(location, resultType, rewriter);
+
+    auto generic = rewriter.create<linalg::GenericOp>(
+        location, TypeRange{resultType},
+        ValueRange{adaptor.getInput(), adaptor.getBias()},
+        ValueRange{empty}, indexingMaps, iteratorTypes,
+        [](OpBuilder &builder, Location nestedLocation,
+           ValueRange arguments) {
+          auto biased = builder.create<arith::AddFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+          builder.create<linalg::YieldOp>(nestedLocation,
+                                           ValueRange{biased.getResult()});
+        });
+
+    rewriter.replaceOp(operation, generic.getResults());
+    return success();
+  }
+};
+
+class LowerReluPattern final : public OpConversionPattern<mininpu::ReluOp> {
+public:
+  using OpConversionPattern<mininpu::ReluOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(mininpu::ReluOp operation, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RankedTensorType resultType =
+        getSupportedResultType(operation.getOutput().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(
+          operation,
+          "lowering requires a statically shaped floating-point result");
+
+    Location location = operation.getLoc();
+    AffineMap identity = AffineMap::getMultiDimIdentityMap(
+        resultType.getRank(), rewriter.getContext());
+    llvm::SmallVector<AffineMap> indexingMaps{identity, identity};
+    llvm::SmallVector<utils::IteratorType> iteratorTypes(
+        resultType.getRank(), utils::IteratorType::parallel);
+    Value empty = createEmptyTensor(location, resultType, rewriter);
+    Type elementType = resultType.getElementType();
+
+    auto generic = rewriter.create<linalg::GenericOp>(
+        location, TypeRange{resultType}, ValueRange{adaptor.getInput()},
+        ValueRange{empty}, indexingMaps, iteratorTypes,
+        [elementType](OpBuilder &builder, Location nestedLocation,
+                      ValueRange arguments) {
+          auto zero = builder.create<arith::ConstantOp>(
+              nestedLocation, builder.getFloatAttr(elementType, 0.0));
+          auto activated = builder.create<arith::MaximumFOp>(
+              nestedLocation, arguments[0], zero.getResult());
+          builder.create<linalg::YieldOp>(
+              nestedLocation, ValueRange{activated.getResult()});
+        });
+
+    rewriter.replaceOp(operation, generic.getResults());
+    return success();
+  }
+};
+
 class LowerFusedLinearPattern final
     : public OpConversionPattern<mininpu::FusedMatMulBiasReluOp> {
 public:
@@ -39,30 +177,21 @@ public:
   matchAndRewrite(mininpu::FusedMatMulBiasReluOp operation,
                   OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto resultType = dyn_cast<RankedTensorType>(operation.getOutput().getType());
-    if (!resultType || !resultType.hasStaticShape())
+    RankedTensorType resultType =
+        getSupportedResultType(operation.getOutput().getType());
+    if (!resultType)
       return rewriter.notifyMatchFailure(
-          operation, "v4 lowering requires a statically shaped ranked tensor");
-
-    Type elementType = resultType.getElementType();
-    if (!isa<FloatType>(elementType))
-      return rewriter.notifyMatchFailure(
-          operation, "v4 lowering currently supports floating-point tensors");
+          operation,
+          "lowering requires a statically shaped floating-point result");
 
     Location location = operation.getLoc();
-
-    auto empty = rewriter.create<tensor::EmptyOp>(
-        location, resultType.getShape(), elementType);
-    auto zero = rewriter.create<arith::ConstantOp>(
-        location, rewriter.getFloatAttr(elementType, 0.0));
-    auto filled = rewriter.create<linalg::FillOp>(
-        location, TypeRange{resultType}, ValueRange{zero.getResult()},
-        ValueRange{empty.getResult()});
+    Type elementType = resultType.getElementType();
+    Value initialized = createZeroFilledTensor(location, resultType, rewriter);
 
     auto matmul = rewriter.create<linalg::MatmulOp>(
         location, TypeRange{resultType},
         ValueRange{adaptor.getLhs(), adaptor.getRhs()},
-        ValueRange{filled->getResult(0)});
+        ValueRange{initialized});
 
     // Tile-planning attributes describe the matrix multiplication and remain
     // visible after the custom operation has been eliminated.
@@ -110,7 +239,7 @@ public:
 
   StringRef getArgument() const final { return "mininpu-lower-to-linalg"; }
   StringRef getDescription() const final {
-    return "Lower planned MiniNPU fused operations to Tensor/Linalg/Arith";
+    return "Lower MiniNPU operations to Tensor/Linalg/Arith";
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -127,9 +256,10 @@ public:
     target.addIllegalDialect<mininpu::MiniNPUDialect>();
 
     RewritePatternSet patterns(&context);
-    patterns.add<LowerFusedLinearPattern>(&context);
-    if (failed(applyPartialConversion(getOperation(), target,
-                                      std::move(patterns))))
+    patterns.add<LowerMatMulPattern, LowerBiasAddPattern, LowerReluPattern,
+                 LowerFusedLinearPattern>(&context);
+    if (failed(applyFullConversion(getOperation(), target,
+                                   std::move(patterns))))
       signalPassFailure();
   }
 };
