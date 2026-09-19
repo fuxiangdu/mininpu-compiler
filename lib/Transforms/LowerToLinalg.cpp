@@ -69,6 +69,25 @@ Value createFilledTensor(Location location, RankedTensorType type, double value,
   return filled.getResult(0);
 }
 
+Value castFloatToF32(Location location, Value value, OpBuilder &builder) {
+  auto sourceType = cast<FloatType>(value.getType());
+  Type f32Type = builder.getF32Type();
+  if (sourceType == f32Type)
+    return value;
+  if (sourceType.getWidth() < 32)
+    return builder.create<arith::ExtFOp>(location, f32Type, value);
+  return builder.create<arith::TruncFOp>(location, f32Type, value);
+}
+
+Value castF32ToFloat(Location location, Value value, FloatType resultType,
+                     OpBuilder &builder) {
+  if (resultType.isF32())
+    return value;
+  if (resultType.getWidth() < 32)
+    return builder.create<arith::TruncFOp>(location, resultType, value);
+  return builder.create<arith::ExtFOp>(location, resultType, value);
+}
+
 class LowerMatMulPattern final
     : public OpConversionPattern<mininpu::MatMulOp> {
 public:
@@ -276,6 +295,131 @@ public:
   }
 };
 
+class LowerRMSNormPattern final
+    : public OpConversionPattern<mininpu::RMSNormOp> {
+public:
+  using OpConversionPattern<mininpu::RMSNormOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(mininpu::RMSNormOp operation, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto inputType = dyn_cast<RankedTensorType>(operation.getInput().getType());
+    auto weightType =
+        dyn_cast<RankedTensorType>(operation.getWeight().getType());
+    RankedTensorType resultType =
+        getSupportedResultType(operation.getOutput().getType());
+    if (!inputType || !inputType.hasStaticShape() || !weightType ||
+        !weightType.hasStaticShape() || !resultType)
+      return rewriter.notifyMatchFailure(
+          operation,
+          "lowering requires statically shaped floating-point tensors");
+
+    int64_t rank = inputType.getRank();
+    int64_t reductionAxis = rank - 1;
+    int64_t normalizedSize = inputType.getDimSize(reductionAxis);
+    if (normalizedSize <= 0)
+      return rewriter.notifyMatchFailure(
+          operation, "lowering requires a non-empty final dimension");
+
+    llvm::SmallVector<int64_t> reducedShape(inputType.getShape().drop_back());
+    RankedTensorType accumulationType =
+        RankedTensorType::get(reducedShape, rewriter.getF32Type());
+    MLIRContext *context = rewriter.getContext();
+    Location location = operation.getLoc();
+    AffineMap identityMap =
+        AffineMap::getMultiDimIdentityMap(rank, context);
+    llvm::SmallVector<AffineExpr> reducedResults;
+    reducedResults.reserve(rank - 1);
+    for (int64_t dimension = 0; dimension < rank - 1; ++dimension)
+      reducedResults.push_back(rewriter.getAffineDimExpr(dimension));
+    AffineMap reductionMap =
+        AffineMap::get(rank, 0, reducedResults, context);
+    AffineMap weightMap = AffineMap::get(
+        rank, 0, {rewriter.getAffineDimExpr(reductionAxis)}, context);
+    llvm::SmallVector<utils::IteratorType> reductionIterators(
+        rank, utils::IteratorType::parallel);
+    reductionIterators[reductionAxis] = utils::IteratorType::reduction;
+    llvm::SmallVector<utils::IteratorType> parallelIterators(
+        rank, utils::IteratorType::parallel);
+
+    Value sumInit =
+        createZeroFilledTensor(location, accumulationType, rewriter);
+    auto sumSquares = rewriter.create<linalg::GenericOp>(
+        location, TypeRange{accumulationType},
+        ValueRange{adaptor.getInput()}, ValueRange{sumInit},
+        llvm::SmallVector<AffineMap>{identityMap, reductionMap},
+        reductionIterators,
+        [](OpBuilder &builder, Location nestedLocation,
+           ValueRange arguments) {
+          Value input =
+              castFloatToF32(nestedLocation, arguments[0], builder);
+          auto square = builder.create<arith::MulFOp>(nestedLocation, input,
+                                                      input);
+          auto accumulated = builder.create<arith::AddFOp>(
+              nestedLocation, arguments[1], square.getResult());
+          builder.create<linalg::YieldOp>(
+              nestedLocation, ValueRange{accumulated.getResult()});
+        });
+
+    Value inverseEmpty =
+        createEmptyTensor(location, accumulationType, rewriter);
+    double epsilon = operation.getEpsilon().convertToDouble();
+    auto inverseRms = rewriter.create<linalg::GenericOp>(
+        location, TypeRange{accumulationType},
+        ValueRange{sumSquares.getResult(0)}, ValueRange{inverseEmpty},
+        llvm::SmallVector<AffineMap>{
+            AffineMap::getMultiDimIdentityMap(rank - 1, context),
+            AffineMap::getMultiDimIdentityMap(rank - 1, context)},
+        llvm::SmallVector<utils::IteratorType>(rank - 1,
+                                              utils::IteratorType::parallel),
+        [normalizedSize, epsilon](OpBuilder &builder, Location nestedLocation,
+                                  ValueRange arguments) {
+          Value divisor = builder.create<arith::ConstantOp>(
+              nestedLocation,
+              builder.getF32FloatAttr(static_cast<double>(normalizedSize)));
+          Value epsilonValue = builder.create<arith::ConstantOp>(
+              nestedLocation, builder.getF32FloatAttr(epsilon));
+          auto mean = builder.create<arith::DivFOp>(nestedLocation,
+                                                    arguments[0], divisor);
+          auto stabilized = builder.create<arith::AddFOp>(
+              nestedLocation, mean.getResult(), epsilonValue);
+          auto inverse = builder.create<math::RsqrtOp>(nestedLocation,
+                                                       stabilized.getResult());
+          builder.create<linalg::YieldOp>(nestedLocation,
+                                           ValueRange{inverse.getResult()});
+        });
+
+    Value outputEmpty = createEmptyTensor(location, resultType, rewriter);
+    auto normalized = rewriter.create<linalg::GenericOp>(
+        location, TypeRange{resultType},
+        ValueRange{adaptor.getInput(), inverseRms.getResult(0),
+                   adaptor.getWeight()},
+        ValueRange{outputEmpty},
+        llvm::SmallVector<AffineMap>{identityMap, reductionMap, weightMap,
+                                     identityMap},
+        parallelIterators,
+        [](OpBuilder &builder, Location nestedLocation,
+           ValueRange arguments) {
+          Value input =
+              castFloatToF32(nestedLocation, arguments[0], builder);
+          Value weight =
+              castFloatToF32(nestedLocation, arguments[2], builder);
+          auto scaled = builder.create<arith::MulFOp>(
+              nestedLocation, input, arguments[1]);
+          auto weighted = builder.create<arith::MulFOp>(
+              nestedLocation, scaled.getResult(), weight);
+          auto resultType = cast<FloatType>(arguments[0].getType());
+          Value result = castF32ToFloat(nestedLocation, weighted.getResult(),
+                                       resultType, builder);
+          builder.create<linalg::YieldOp>(nestedLocation,
+                                           ValueRange{result});
+        });
+
+    rewriter.replaceOp(operation, normalized.getResults());
+    return success();
+  }
+};
+
 class LowerBiasAddPattern final
     : public OpConversionPattern<mininpu::BiasAddOp> {
 public:
@@ -453,7 +597,8 @@ public:
 
     RewritePatternSet patterns(&context);
     patterns.add<LowerMatMulPattern, LowerBatchMatMulPattern,
-                 LowerSoftmaxPattern, LowerBiasAddPattern, LowerReluPattern,
+                 LowerSoftmaxPattern, LowerRMSNormPattern,
+                 LowerBiasAddPattern, LowerReluPattern,
                  LowerFusedLinearPattern>(&context);
     if (failed(applyFullConversion(getOperation(), target,
                                    std::move(patterns))))
