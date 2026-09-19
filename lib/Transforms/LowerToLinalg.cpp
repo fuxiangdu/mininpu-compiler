@@ -82,6 +82,73 @@ public:
   }
 };
 
+class LowerBatchMatMulPattern final
+    : public OpConversionPattern<mininpu::BatchMatMulOp> {
+public:
+  using OpConversionPattern<mininpu::BatchMatMulOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(mininpu::BatchMatMulOp operation, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto lhsType = dyn_cast<RankedTensorType>(operation.getLhs().getType());
+    auto rhsType = dyn_cast<RankedTensorType>(operation.getRhs().getType());
+    RankedTensorType resultType =
+        getSupportedResultType(operation.getOutput().getType());
+    if (!lhsType || !rhsType || !lhsType.hasStaticShape() ||
+        !rhsType.hasStaticShape() || !resultType)
+      return rewriter.notifyMatchFailure(
+          operation,
+          "lowering requires statically shaped floating-point tensors");
+
+    Location location = operation.getLoc();
+    Value initialized = createZeroFilledTensor(location, resultType, rewriter);
+    int64_t lhsBatch = lhsType.getDimSize(0);
+    int64_t rhsBatch = rhsType.getDimSize(0);
+    if (lhsBatch == rhsBatch) {
+      auto batchMatmul = rewriter.create<linalg::BatchMatmulOp>(
+          location, TypeRange{resultType},
+          ValueRange{adaptor.getLhs(), adaptor.getRhs()},
+          ValueRange{initialized});
+      rewriter.replaceOp(operation, batchMatmul.getResults());
+      return success();
+    }
+
+    MLIRContext *context = rewriter.getContext();
+    AffineExpr batch = rewriter.getAffineDimExpr(0);
+    AffineExpr row = rewriter.getAffineDimExpr(1);
+    AffineExpr column = rewriter.getAffineDimExpr(2);
+    AffineExpr reduction = rewriter.getAffineDimExpr(3);
+    AffineExpr zero = rewriter.getAffineConstantExpr(0);
+    AffineMap lhsMap = AffineMap::get(
+        4, 0, {lhsBatch == 1 ? zero : batch, row, reduction}, context);
+    AffineMap rhsMap = AffineMap::get(
+        4, 0, {rhsBatch == 1 ? zero : batch, reduction, column}, context);
+    AffineMap outputMap =
+        AffineMap::get(4, 0, {batch, row, column}, context);
+    llvm::SmallVector<AffineMap> indexingMaps{lhsMap, rhsMap, outputMap};
+    llvm::SmallVector<utils::IteratorType> iteratorTypes{
+        utils::IteratorType::parallel, utils::IteratorType::parallel,
+        utils::IteratorType::parallel, utils::IteratorType::reduction};
+
+    auto generic = rewriter.create<linalg::GenericOp>(
+        location, TypeRange{resultType},
+        ValueRange{adaptor.getLhs(), adaptor.getRhs()},
+        ValueRange{initialized}, indexingMaps, iteratorTypes,
+        [](OpBuilder &builder, Location nestedLocation,
+           ValueRange arguments) {
+          auto product = builder.create<arith::MulFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+          auto accumulated = builder.create<arith::AddFOp>(
+              nestedLocation, arguments[2], product.getResult());
+          builder.create<linalg::YieldOp>(
+              nestedLocation, ValueRange{accumulated.getResult()});
+        });
+
+    rewriter.replaceOp(operation, generic.getResults());
+    return success();
+  }
+};
+
 class LowerBiasAddPattern final
     : public OpConversionPattern<mininpu::BiasAddOp> {
 public:
@@ -256,7 +323,8 @@ public:
     target.addIllegalDialect<mininpu::MiniNPUDialect>();
 
     RewritePatternSet patterns(&context);
-    patterns.add<LowerMatMulPattern, LowerBiasAddPattern, LowerReluPattern,
+    patterns.add<LowerMatMulPattern, LowerBatchMatMulPattern,
+                 LowerBiasAddPattern, LowerReluPattern,
                  LowerFusedLinearPattern>(&context);
     if (failed(applyFullConversion(getOperation(), target,
                                    std::move(patterns))))
