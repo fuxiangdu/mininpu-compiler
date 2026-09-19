@@ -80,4 +80,5 @@ void mininpu::registerMiniNPUPasses() {
   registerPlanTilesPass();
   registerLowerToLinalgPass();
   registerApplyTilesPass();
+  registerPlanAttentionPass();
 }

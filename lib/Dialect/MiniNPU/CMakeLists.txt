@@ -7,5 +7,6 @@ add_mlir_dialect_library(MiniNPUDialect
   MiniNPUOpsIncGen
 
   LINK_LIBS PUBLIC
+  MLIRBytecodeOpInterface
   MLIRIR
 )

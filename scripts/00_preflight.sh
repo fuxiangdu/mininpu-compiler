@@ -34,4 +34,4 @@ done
 
 echo "[INFO] C++ compiler: $("${CXX_COMPILER}" --version | head -n 1)"
 echo "[INFO] MLIR: $("${MLIR_OPT}" --version | head -n 1)"
-echo "[PASS] MiniNPU v7 preflight checks passed"
+echo "[PASS] MiniNPU compiler preflight checks passed"
