@@ -17,7 +17,7 @@ jobs:
             cmake ninja-build python3
       - name: Build
         run: bash scripts/01_build.sh
-      - name: Run v0-v8 regression
+      - name: Run v0-v9 regression
         run: |
           bash scripts/02_test.sh
           bash scripts/03_test_dialect.sh
@@ -30,3 +30,4 @@ jobs:
           bash scripts/10_test_batch_matmul_lowering.sh
           bash scripts/11_test_softmax_lowering.sh
           bash scripts/12_test_rms_norm_lowering.sh
+          bash scripts/13_test_attention_pipeline.sh

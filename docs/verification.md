@@ -29,6 +29,8 @@ an LLVM/MLIR 18.1.8 source build with GCC 13.3.0. This run covered
 | v5 | tensor elimination; MemRef allocation/load; tile metadata | local deallocation; wrong order rejected | PASS |
 | v6 | SCF loops; LLVM dialect/IR; native linking | four reference outputs and process status | PASS |
 | v7 | planned M/N/K sizes become SCF loops and slices | partial boundaries; idempotence; incomplete plan rejected | PASS |
+| v8 | BatchMatMul, stable Softmax and FP32 RMSNorm lowering | broadcasts, large logits, FP16 casts and dynamic rejection | PASS |
+| v9 | attention graph planning and native execution | shared-value boundary, idempotence and four outputs | PASS |
 
 ## Tile-plan evidence
 
@@ -106,8 +108,30 @@ tails. The tiled `linalg.matmul` carries both the original cost-model evidence
 and `mininpu.tiles_applied = true`, which prevents accidental repeated tiling.
 The regression verifies byte-for-byte idempotence and rejects a partial plan.
 
+## v8 multi-operation evidence
+
+Equal-batch BatchMatMul lowers to `linalg.batch_matmul`; unit-batch cases use
+explicit affine broadcast maps. Softmax lowers to max, subtract, exponential,
+sum and divide stages and remains finite for logits `[1000,1001,1002]`.
+RMSNorm uses explicit FP16-to-FP32 casts for square-sum accumulation and casts
+the scaled result back to the input type. All three paths reach native code and
+match their reference outputs.
+
+## v9 attention-plan evidence
+
+The planner recognizes `BatchMatMul -> Softmax -> BatchMatMul -> RMSNorm`, tags
+the four graph roles and checks every producer-consumer edge with SSA use
+counts. A single-use graph becomes a `streaming-fusion-candidate`; an extra
+consumer of the score tensor forces `materialize-shared-boundaries`. For the
+checked `1x2x2xf32` graph, the pass estimates 96 versus 64 bytes of avoidable
+write/read traffic. Replanning is byte-for-byte idempotent, and the complete
+unfused semantic graph lowers to LLVM and matches four native outputs within
+`5.96e-08` absolute error.
+
 ## Interpretation limits
 
 These results prove compiler transformations, verifier behavior and cost-model
-consistency. They are not hardware latency measurements and do not prove that
-the selected tiles are optimal on a commercial NPU.
+consistency. Fusion attributes are planning decisions, not evidence that a
+monolithic fused attention kernel has been emitted. These are not hardware
+latency measurements and do not prove that selected tiles are optimal on a
+commercial NPU.

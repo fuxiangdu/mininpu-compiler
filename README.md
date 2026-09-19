@@ -7,9 +7,10 @@ MiniNPU Compiler is an educational out-of-tree MLIR compiler for learning the
 core workflow of an NPU compiler: defining a target dialect, validating tensor
 semantics, rewriting graph patterns, planning tiles under on-chip memory
 constraints, lowering target operations to upstream structured MLIR, and
-materializing tensor values as owned MemRef buffers. The v7 pipeline applies
-the selected M/N/K schedule as boundary-safe SCF loops and tensor slices, then
-continues through the LLVM dialect to a numerically checked host executable.
+materializing tensor values as owned MemRef buffers. The v9 pipeline also
+supports BatchMatMul, numerically stable Softmax and FP32-accumulating RMSNorm,
+recognizes QK-Softmax-PV-RMSNorm graphs, and plans fusion-safe materialization
+boundaries before lowering the complete graph to a checked host executable.
 
 The project is intentionally small enough to read end to end. It demonstrates
 compiler mechanisms and an explicit educational cost model; it does not claim
@@ -19,7 +20,7 @@ to reproduce a proprietary NPU compiler or generate production device code.
 
 ```mermaid
 flowchart TD
-    A["MiniNPU graph IR"] --> B["Fuse MatMul + BiasAdd + ReLU"]
+    A["MiniNPU graph IR"] --> B["Graph fusion and attention planning"]
     B --> C["UB-aware tile planning"]
     C --> D["Dialect conversion"]
     D --> E["Tensor + Linalg + Arith IR"]
@@ -32,17 +33,18 @@ flowchart TD
 | Stage | Main implementation | Result |
 | --- | --- | --- |
 | Driver | standalone `mininpu-opt` | upstream and custom passes in one tool |
-| Dialect | ODS/TableGen plus C++ verifiers | `matmul`, `bias_add`, `relu`, fused op |
-| Fusion | `OpRewritePattern` | safe 3-to-1 fusion with single-use guards |
+| Dialect | ODS/TableGen plus C++ verifiers | linear, BatchMatMul, Softmax and RMSNorm ops |
+| Graph planning | use-def analysis | safe fusion boundaries and intermediate-traffic estimates |
+| Fusion | `OpRewritePattern` | safe 3-to-1 linear fusion with single-use guards |
 | Planning | UB-capacity search and cost model | deterministic M/N/K tile metadata |
 | Lowering | MLIR dialect conversion | standalone or fused ops fully legalized to Tensor/Linalg/Arith |
 | Scheduling | Linalg tiling driven by planned attributes | boundary-safe SCF loops and tensor slices |
 | Bufferization | One-Shot Bufferize and ownership deallocation | tensor-free MemRef/Linalg IR |
-| Host code generation | Linalg-to-SCF and progressive LLVM lowering | linked executable with four checked outputs |
+| Host code generation | Linalg-to-SCF and progressive LLVM lowering | linked executables with numerical checks |
 
 ## Verified results
 
-The full v0-v7 suite is designed for LLVM/MLIR 18 on Ubuntu
+The full v0-v9 suite is designed for LLVM/MLIR 18 on Ubuntu
 24.04 x86-64.
 
 For `M=128`, `K=256`, `N=512`, `f32`:
@@ -52,9 +54,9 @@ For `M=128`, `K=256`, `N=512`, `f32`:
 | 64 KiB | `(48,48,48)` | 55,488 B | 198 |
 | 256 KiB | `(112,96,96)` | 246,144 B | 36 |
 
-The suite also verifies invalid MatMul shapes, shared-intermediate fusion
-safety, standalone and fused lowering, lowering idempotence, an impossible
-128-byte UB target, dynamic-shape planning fallback and rejection, and
+The suite also verifies broadcast BatchMatMul, stable Softmax on large logits,
+FP16 RMSNorm with FP32 accumulation, attention graph recognition, shared-value
+fusion safety, native end-to-end execution, invalid shapes, idempotence and
 metadata preservation. See [the verification report](docs/verification.md)
 and the checked-in IR evidence under `docs/evidence/`.
 
@@ -70,7 +72,7 @@ Required environment:
 ```bash
 chmod +x scripts/*.sh
 bash scripts/setup_ubuntu_24_04.sh
-bash scripts/run_v7.sh
+bash scripts/run_v9.sh
 ```
 
 Or run the compiler pipeline directly:
@@ -86,21 +88,24 @@ build/bin/mininpu-opt test/lowering.mlir \
 - `lib/Dialect/MiniNPU/`: dialect initialization and semantic verifiers;
 - `lib/Transforms/FuseMatMulBiasRelu.cpp`: graph fusion;
 - `lib/Transforms/PlanTiles.cpp`: UB-aware tile selection;
-- `lib/Transforms/LowerToLinalg.cpp`: composable lowering for MatMul, BiasAdd, ReLU and the fused operation;
+- `lib/Transforms/PlanAttention.cpp`: attention graph recognition and safe fusion-boundary planning;
+- `lib/Transforms/LowerToLinalg.cpp`: composable lowering for linear and attention-related operations;
 - `lib/Transforms/ApplyTiles.cpp`: cost-model-driven Linalg/SCF tile materialization;
 - `scripts/07_test_bufferization.sh`: tensor-to-MemRef ownership regression;
 - `scripts/08_test_cpu_execution.sh`: SCF/LLVM lowering and native execution;
 - `scripts/09_test_applied_tiling.sh`: scheduled IR, idempotence and malformed-plan regression;
+- `scripts/13_test_attention_pipeline.sh`: graph planning and native end-to-end attention regression;
 - `runtime/check_f32.c`: minimal numerical-checking runtime ABI;
 - `test/`: positive, negative, safety and capacity cases;
 - `scripts/`: reproducible build and regression entry points.
 
 ## Current boundary
 
-The tile planner uses a documented educational UB model. v7 produces LLVM IR
-and a native executable for the host CPU. It does not generate NPU machine code.
-Vectorization, proprietary device runtime integration, target instruction
-selection and NPU hardware benchmarking remain future work.
+The tile and attention planners use documented educational models. The v9
+attention pass marks fusion candidates and safe materialization boundaries; it
+does not yet emit a monolithic fused attention kernel. v9 produces LLVM IR and
+native host executables, not NPU machine code. Vectorization, device runtime
+integration, instruction selection and NPU benchmarking remain future work.
 
 ## License
 
