@@ -79,4 +79,5 @@ void mininpu::registerMiniNPUPasses() {
   PassRegistration<FuseMatMulBiasReluPass>();
   registerPlanTilesPass();
   registerLowerToLinalgPass();
+  registerApplyTilesPass();
 }

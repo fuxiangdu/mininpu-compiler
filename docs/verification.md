@@ -13,6 +13,10 @@ The source manifest matched every tracked source, script, test and document.
 The compiler built successfully, including `FuseMatMulBiasRelu.cpp`,
 `PlanTiles.cpp` and `LowerToLinalg.cpp`.
 
+The v7 scheduling extension was additionally built and fully regressed against
+an LLVM/MLIR 18.1.8 source build with GCC 13.3.0. This run covered
+`ApplyTiles.cpp`, the `llc` plus GCC native-link fallback and all v0-v7 scripts.
+
 ## Regression matrix
 
 | Stage | Positive checks | Negative or safety checks | Result |
@@ -24,6 +28,7 @@ The compiler built successfully, including `FuseMatMulBiasRelu.cpp`,
 | v4 | fused and standalone structured lowering; metadata; idempotence | shared-use safety; dynamic shapes rejected | PASS |
 | v5 | tensor elimination; MemRef allocation/load; tile metadata | local deallocation; wrong order rejected | PASS |
 | v6 | SCF loops; LLVM dialect/IR; native linking | four reference outputs and process status | PASS |
+| v7 | planned M/N/K sizes become SCF loops and slices | partial boundaries; idempotence; incomplete plan rejected | PASS |
 
 ## Tile-plan evidence
 
@@ -91,6 +96,15 @@ an LLVM-dialect-only module, translated LLVM IR containing a native `main`,
 successful Clang linking, four passing runtime checks and exit status zero.
 The complete v0-v6 regression passed on Ubuntu 24.04 with LLVM/MLIR 18.1.3.
 Generated v6 IR and runtime outputs are stored under `docs/evidence/v6/`.
+
+## v7 scheduled-tiling evidence
+
+The 256 KiB `(112,96,96)` plan is materialized as three nested `scf.for`
+loops. Dynamic `tensor.extract_slice` and `tensor.insert_slice` operations use
+clamped sizes at the M/N/K boundaries, including the non-divisible 128/512/256
+tails. The tiled `linalg.matmul` carries both the original cost-model evidence
+and `mininpu.tiles_applied = true`, which prevents accidental repeated tiling.
+The regression verifies byte-for-byte idempotence and rejects a partial plan.
 
 ## Interpretation limits
 

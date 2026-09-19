@@ -19,8 +19,10 @@ namespace mininpu {
 std::unique_ptr<mlir::Pass> createFuseMatMulBiasReluPass();
 std::unique_ptr<mlir::Pass> createPlanTilesPass();
 std::unique_ptr<mlir::Pass> createLowerToLinalgPass();
+std::unique_ptr<mlir::Pass> createApplyTilesPass();
 void registerPlanTilesPass();
 void registerLowerToLinalgPass();
+void registerApplyTilesPass();
 void registerMiniNPUPasses();
 
 } // namespace mininpu

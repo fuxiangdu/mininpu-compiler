@@ -11,6 +11,7 @@
 ```bash
 cd ~/mininpu-compiler
 chmod +x scripts/*.sh
+bash scripts/setup_ubuntu_24_04.sh
 set -o pipefail
 bash scripts/01_build.sh 2>&1 | tee build.log
 echo "BUILD_EXIT_CODE=$?"
@@ -20,14 +21,14 @@ echo "BUILD_EXIT_CODE=$?"
 
 ```bash
 set -o pipefail
-bash scripts/run_v6.sh 2>&1 | tee regression.log
+bash scripts/run_v7.sh 2>&1 | tee regression.log
 echo "TEST_EXIT_CODE=$?"
 ```
 
 成功标志：
 
 ```text
-[PASS] MiniNPU compiler v6 completed
+[PASS] MiniNPU compiler v7 completed
 TEST_EXIT_CODE=0
 ```
 
@@ -41,6 +42,7 @@ bash scripts/05_test_tiling.sh
 bash scripts/06_test_lowering.sh
 bash scripts/07_test_bufferization.sh
 bash scripts/08_test_cpu_execution.sh
+bash scripts/09_test_applied_tiling.sh
 ```
 
 `invalid MatMul`、`128-byte UB` 和 `wrong pipeline/order` 测试中的 error 是程序刻意
