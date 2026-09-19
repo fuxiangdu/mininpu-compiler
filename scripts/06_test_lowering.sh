@@ -58,24 +58,58 @@ if ! cmp -s "${RESULT_DIR}/lowered.mlir" \
   exit 1
 fi
 
-if "${OPT}" "${PROJECT_ROOT}/test/lowering.mlir" \
-    --mininpu-lower-to-linalg -o /dev/null \
-    >"${RESULT_DIR}/wrong_order.log" 2>&1; then
-  echo "[ERROR] unfused MiniNPU operations were unexpectedly accepted"
+"${OPT}" "${PROJECT_ROOT}/test/lowering.mlir" \
+  --mininpu-lower-to-linalg \
+  --verify-each \
+  -o "${RESULT_DIR}/unfused_lowered.mlir"
+
+for expected in "linalg.matmul" "arith.addf" "arith.maximumf"; do
+  grep -Fq "${expected}" "${RESULT_DIR}/unfused_lowered.mlir" || {
+    echo "[ERROR] unfused lowering is missing ${expected}"
+    exit 1
+  }
+done
+
+if grep -Eq '"mininpu\.(matmul|bias_add|relu|fused_matmul_bias_relu)"' \
+    "${RESULT_DIR}/unfused_lowered.mlir"; then
+  echo "[ERROR] a MiniNPU operation survived unfused lowering"
   exit 1
 fi
 
-grep -Fq "failed to legalize operation" "${RESULT_DIR}/wrong_order.log" || {
-  echo "[ERROR] expected conversion failure diagnostic was not found"
-  sed -n '1,160p' "${RESULT_DIR}/wrong_order.log"
+"${OPT}" "${PROJECT_ROOT}/test/no_fusion_shared_use.mlir" \
+  --mininpu-lower-to-linalg \
+  --verify-each \
+  -o "${RESULT_DIR}/shared_use_lowered.mlir"
+
+if grep -Eq '"mininpu\.(matmul|bias_add|relu|fused_matmul_bias_relu)"' \
+    "${RESULT_DIR}/shared_use_lowered.mlir"; then
+  echo "[ERROR] shared-use graph was not fully legalized"
+  exit 1
+fi
+
+if "${OPT}" "${PROJECT_ROOT}/test/tiling_dynamic.mlir" \
+    --mininpu-lower-to-linalg -o /dev/null \
+    >"${RESULT_DIR}/dynamic_rejection.log" 2>&1; then
+  echo "[ERROR] unsupported dynamic lowering unexpectedly succeeded"
+  exit 1
+fi
+
+grep -Fq "failed to legalize operation" \
+    "${RESULT_DIR}/dynamic_rejection.log" || {
+  echo "[ERROR] expected dynamic-shape rejection was not found"
+  sed -n '1,160p' "${RESULT_DIR}/dynamic_rejection.log"
   exit 1
 }
 
 echo "===== lowered Tensor/Linalg/Arith IR ====="
 sed -n '1,220p' "${RESULT_DIR}/lowered.mlir"
-echo "===== expected wrong-pipeline rejection ====="
-sed -n '1,100p' "${RESULT_DIR}/wrong_order.log"
+echo "===== independently lowered unfused graph ====="
+sed -n '1,180p' "${RESULT_DIR}/unfused_lowered.mlir"
+echo "===== expected dynamic-shape rejection ====="
+sed -n '1,100p' "${RESULT_DIR}/dynamic_rejection.log"
 echo "[PASS] MiniNPU fused operation lowered to standard MLIR dialects"
 echo "[PASS] UB tile-planning metadata preserved on linalg.matmul"
 echo "[PASS] Lowering pass idempotence validated"
-echo "[PASS] Illegal unfused MiniNPU operations rejected"
+echo "[PASS] Standalone MatMul, BiasAdd and ReLU lowering validated"
+echo "[PASS] Shared-use graphs lower without requiring unsafe fusion"
+echo "[PASS] Unsupported dynamic-shape lowering rejected"

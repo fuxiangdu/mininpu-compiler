@@ -4,15 +4,17 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
 OPT="${PROJECT_ROOT}/build/bin/mininpu-opt"
-TRANSLATE=/usr/bin/mlir-translate-18
-CLANG=/usr/bin/clang-18
+TRANSLATE="${MLIR_TRANSLATE:-$(command -v mlir-translate-18 || command -v mlir-translate || true)}"
+CLANG="${CLANG:-$(command -v clang-18 || command -v clang || true)}"
+LLC="${LLC:-$(command -v llc-18 || command -v llc || true)}"
+CC_BIN="${CC_BIN:-$(command -v cc || command -v gcc || true)}"
 RESULT_DIR="${PROJECT_ROOT}/results/v6"
 
-FRONTEND_PIPELINE='builtin.module(mininpu-fuse-linear-relu,mininpu-plan-tiles,mininpu-lower-to-linalg,empty-tensor-to-alloc-tensor,one-shot-bufferize{bufferize-function-boundaries},buffer-deallocation-pipeline,canonicalize,cse)'
+FRONTEND_PIPELINE='builtin.module(mininpu-fuse-linear-relu,mininpu-plan-tiles,mininpu-lower-to-linalg,mininpu-apply-tiles,empty-tensor-to-alloc-tensor,one-shot-bufferize{bufferize-function-boundaries},buffer-deallocation-pipeline,canonicalize,cse)'
 LOOP_PIPELINE='builtin.module(func.func(convert-linalg-to-loops,lower-affine,canonicalize,cse))'
 LLVM_PIPELINE='builtin.module(func.func(convert-scf-to-cf,convert-arith-to-llvm),convert-cf-to-llvm,expand-strided-metadata,finalize-memref-to-llvm,convert-func-to-llvm,reconcile-unrealized-casts)'
 
-for tool in "${OPT}" "${TRANSLATE}" "${CLANG}"; do
+for tool in "${OPT}" "${TRANSLATE}"; do
   test -x "${tool}" || {
     echo "[ERROR] required executable is missing: ${tool}"
     exit 1
@@ -77,11 +79,28 @@ grep -Fq 'define i32 @main()' "${RESULT_DIR}/program.ll" || {
   exit 1
 }
 
-"${CLANG}" -O2 \
-  "${RESULT_DIR}/program.ll" \
-  "${PROJECT_ROOT}/runtime/check_f32.c" \
-  -lm \
-  -o "${RESULT_DIR}/mininpu_v6_runner"
+if test -x "${CLANG}"; then
+  "${CLANG}" -O2 \
+    "${RESULT_DIR}/program.ll" \
+    "${PROJECT_ROOT}/runtime/check_f32.c" \
+    -lm \
+    -o "${RESULT_DIR}/mininpu_v6_runner"
+elif test -x "${LLC}" && test -x "${CC_BIN}"; then
+  "${LLC}" -filetype=obj -relocation-model=pic \
+    "${RESULT_DIR}/program.ll" \
+    -o "${RESULT_DIR}/program.o"
+  "${CC_BIN}" -O2 -c \
+    "${PROJECT_ROOT}/runtime/check_f32.c" \
+    -o "${RESULT_DIR}/check_f32.o"
+  "${CC_BIN}" \
+    "${RESULT_DIR}/program.o" \
+    "${RESULT_DIR}/check_f32.o" \
+    -lm \
+    -o "${RESULT_DIR}/mininpu_v6_runner"
+else
+  echo "[ERROR] native linking needs Clang, or both llc and a C compiler"
+  exit 1
+fi
 
 set +e
 "${RESULT_DIR}/mininpu_v6_runner" \
@@ -107,5 +126,5 @@ grep -n -m 12 -E 'llvm\.func @main|llvm\.call @check_f32|llvm\.(load|store)' \
   "${RESULT_DIR}/llvm_dialect.mlir"
 echo "[PASS] Linalg operations lowered to explicit SCF loops"
 echo "[PASS] SCF, MemRef, Arith and Func lowered to the LLVM dialect"
-echo "[PASS] LLVM dialect translated to LLVM IR and linked by Clang"
+echo "[PASS] LLVM dialect translated to LLVM IR and linked into a native runner"
 echo "[PASS] Native execution matched all four reference outputs"
