@@ -12,6 +12,7 @@ add_mlir_library(MiniNPUTransforms
   MLIRIR
   MLIRLinalgDialect
   MLIRLinalgTransforms
+  MLIRMathDialect
   MLIRPass
   MLIRSCFDialect
   MLIRTensorDialect

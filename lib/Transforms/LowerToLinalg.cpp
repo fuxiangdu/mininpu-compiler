@@ -13,6 +13,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/Dialect/Utils/StructuredOpsUtils.h"
 #include "mlir/IR/AffineMap.h"
@@ -23,6 +24,7 @@
 
 #include "llvm/ADT/SmallVector.h"
 
+#include <limits>
 #include <memory>
 
 using namespace mlir;
@@ -52,6 +54,17 @@ Value createZeroFilledTensor(Location location, RankedTensorType type,
       location, rewriter.getFloatAttr(type.getElementType(), 0.0));
   auto filled = rewriter.create<linalg::FillOp>(
       location, TypeRange{type}, ValueRange{zero.getResult()},
+      ValueRange{empty});
+  return filled.getResult(0);
+}
+
+Value createFilledTensor(Location location, RankedTensorType type, double value,
+                         ConversionPatternRewriter &rewriter) {
+  Value empty = createEmptyTensor(location, type, rewriter);
+  auto scalar = rewriter.create<arith::ConstantOp>(
+      location, rewriter.getFloatAttr(type.getElementType(), value));
+  auto filled = rewriter.create<linalg::FillOp>(
+      location, TypeRange{type}, ValueRange{scalar.getResult()},
       ValueRange{empty});
   return filled.getResult(0);
 }
@@ -145,6 +158,120 @@ public:
         });
 
     rewriter.replaceOp(operation, generic.getResults());
+    return success();
+  }
+};
+
+class LowerSoftmaxPattern final
+    : public OpConversionPattern<mininpu::SoftmaxOp> {
+public:
+  using OpConversionPattern<mininpu::SoftmaxOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(mininpu::SoftmaxOp operation, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    RankedTensorType resultType =
+        getSupportedResultType(operation.getOutput().getType());
+    auto inputType = dyn_cast<RankedTensorType>(operation.getInput().getType());
+    if (!inputType || !inputType.hasStaticShape() || !resultType)
+      return rewriter.notifyMatchFailure(
+          operation,
+          "lowering requires statically shaped floating-point tensors");
+
+    int64_t rank = inputType.getRank();
+    int64_t axis = operation.getAxisAttr().getInt();
+    if (axis < 0)
+      axis += rank;
+
+    llvm::SmallVector<int64_t> reducedShape;
+    reducedShape.reserve(rank - 1);
+    llvm::SmallVector<AffineExpr> reducedResults;
+    reducedResults.reserve(rank - 1);
+    for (int64_t dimension = 0; dimension < rank; ++dimension) {
+      if (dimension == axis)
+        continue;
+      reducedShape.push_back(inputType.getDimSize(dimension));
+      reducedResults.push_back(rewriter.getAffineDimExpr(dimension));
+    }
+
+    MLIRContext *context = rewriter.getContext();
+    Location location = operation.getLoc();
+    Type elementType = inputType.getElementType();
+    RankedTensorType reducedType =
+        RankedTensorType::get(reducedShape, elementType);
+    AffineMap identityMap =
+        AffineMap::getMultiDimIdentityMap(rank, context);
+    AffineMap reductionMap =
+        AffineMap::get(rank, 0, reducedResults, context);
+    llvm::SmallVector<utils::IteratorType> reductionIterators(
+        rank, utils::IteratorType::parallel);
+    reductionIterators[axis] = utils::IteratorType::reduction;
+    llvm::SmallVector<utils::IteratorType> parallelIterators(
+        rank, utils::IteratorType::parallel);
+
+    Value maxInit = createFilledTensor(
+        location, reducedType,
+        -std::numeric_limits<double>::infinity(), rewriter);
+    auto rowMax = rewriter.create<linalg::GenericOp>(
+        location, TypeRange{reducedType}, ValueRange{adaptor.getInput()},
+        ValueRange{maxInit},
+        llvm::SmallVector<AffineMap>{identityMap, reductionMap},
+        reductionIterators,
+        [](OpBuilder &builder, Location nestedLocation,
+           ValueRange arguments) {
+          auto maximum = builder.create<arith::MaximumFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+          builder.create<linalg::YieldOp>(
+              nestedLocation, ValueRange{maximum.getResult()});
+        });
+
+    Value expEmpty = createEmptyTensor(location, resultType, rewriter);
+    auto shiftedExp = rewriter.create<linalg::GenericOp>(
+        location, TypeRange{resultType},
+        ValueRange{adaptor.getInput(), rowMax.getResult(0)},
+        ValueRange{expEmpty},
+        llvm::SmallVector<AffineMap>{identityMap, reductionMap, identityMap},
+        parallelIterators,
+        [](OpBuilder &builder, Location nestedLocation,
+           ValueRange arguments) {
+          auto shifted = builder.create<arith::SubFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+          auto exponential = builder.create<math::ExpOp>(
+              nestedLocation, shifted.getResult());
+          builder.create<linalg::YieldOp>(
+              nestedLocation, ValueRange{exponential.getResult()});
+        });
+
+    Value sumInit = createZeroFilledTensor(location, reducedType, rewriter);
+    auto rowSum = rewriter.create<linalg::GenericOp>(
+        location, TypeRange{reducedType}, ValueRange{shiftedExp.getResult(0)},
+        ValueRange{sumInit},
+        llvm::SmallVector<AffineMap>{identityMap, reductionMap},
+        reductionIterators,
+        [](OpBuilder &builder, Location nestedLocation,
+           ValueRange arguments) {
+          auto sum = builder.create<arith::AddFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+          builder.create<linalg::YieldOp>(nestedLocation,
+                                           ValueRange{sum.getResult()});
+        });
+
+    Value outputEmpty = createEmptyTensor(location, resultType, rewriter);
+    auto normalized = rewriter.create<linalg::GenericOp>(
+        location, TypeRange{resultType},
+        ValueRange{shiftedExp.getResult(0), rowSum.getResult(0)},
+        ValueRange{outputEmpty},
+        llvm::SmallVector<AffineMap>{identityMap, reductionMap, identityMap},
+        parallelIterators,
+        [](OpBuilder &builder, Location nestedLocation,
+           ValueRange arguments) {
+          auto quotient = builder.create<arith::DivFOp>(
+              nestedLocation, arguments[0], arguments[1]);
+          builder.create<linalg::YieldOp>(
+              nestedLocation, ValueRange{quotient.getResult()});
+        });
+
+    rewriter.replaceOp(operation, normalized.getResults());
     return success();
   }
 };
@@ -311,20 +438,22 @@ public:
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<arith::ArithDialect, func::FuncDialect,
-                    linalg::LinalgDialect, tensor::TensorDialect>();
+                    linalg::LinalgDialect, math::MathDialect,
+                    tensor::TensorDialect>();
   }
 
   void runOnOperation() override {
     MLIRContext &context = getContext();
     ConversionTarget target(context);
     target.addLegalDialect<arith::ArithDialect, func::FuncDialect,
-                           linalg::LinalgDialect, tensor::TensorDialect>();
+                           linalg::LinalgDialect, math::MathDialect,
+                           tensor::TensorDialect>();
     target.addLegalOp<ModuleOp>();
     target.addIllegalDialect<mininpu::MiniNPUDialect>();
 
     RewritePatternSet patterns(&context);
     patterns.add<LowerMatMulPattern, LowerBatchMatMulPattern,
-                 LowerBiasAddPattern, LowerReluPattern,
+                 LowerSoftmaxPattern, LowerBiasAddPattern, LowerReluPattern,
                  LowerFusedLinearPattern>(&context);
     if (failed(applyFullConversion(getOperation(), target,
                                    std::move(patterns))))
