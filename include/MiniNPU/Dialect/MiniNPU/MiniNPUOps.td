@@ -40,6 +40,41 @@ def MiniNPU_ReluOp : MiniNPU_Op<"relu"> {
   let hasVerifier = 1;
 }
 
+def MiniNPU_BatchMatMulOp : MiniNPU_Op<"batch_matmul"> {
+  let summary = "Batched rank-3 tensor matrix multiplication";
+  let description = [{
+    Multiplies BxMxK and BxKxN tensors and produces BxMxN. A unit batch
+    dimension may be broadcast. The verifier checks ranks, element types,
+    contraction dimensions, batch compatibility and the output shape.
+  }];
+  let arguments = (ins AnyTensor:$lhs, AnyTensor:$rhs);
+  let results = (outs AnyTensor:$output);
+  let hasVerifier = 1;
+}
+
+def MiniNPU_SoftmaxOp : MiniNPU_Op<"softmax"> {
+  let summary = "Numerically stable softmax along one tensor dimension";
+  let description = [{
+    Computes softmax along the selected axis. Negative axes follow the usual
+    Python convention and are normalized against the input rank.
+  }];
+  let arguments = (ins AnyTensor:$input, I64Attr:$axis);
+  let results = (outs AnyTensor:$output);
+  let hasVerifier = 1;
+}
+
+def MiniNPU_RMSNormOp : MiniNPU_Op<"rms_norm"> {
+  let summary = "RMS normalization over the final tensor dimension";
+  let description = [{
+    Normalizes the final input dimension using a rank-1 weight and a positive
+    epsilon. Lowering accumulates the sum of squares in fp32.
+  }];
+  let arguments = (ins AnyTensor:$input, AnyTensor:$weight,
+                       F64Attr:$epsilon);
+  let results = (outs AnyTensor:$output);
+  let hasVerifier = 1;
+}
+
 def MiniNPU_FusedMatMulBiasReluOp
     : MiniNPU_Op<"fused_matmul_bias_relu"> {
   let summary = "Fused matrix multiplication, bias addition and ReLU";

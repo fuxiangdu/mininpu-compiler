@@ -10,6 +10,7 @@
 #define MININPU_DIALECT_MININPU_MININPUOPS_H
 
 #include "MiniNPU/Dialect/MiniNPU/MiniNPUDialect.h"
+#include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
 
